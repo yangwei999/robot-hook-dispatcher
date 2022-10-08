@@ -15,10 +15,11 @@ func (c *configuration) Validate() error {
 func (c *configuration) SetDefault() {}
 
 type accessConfig struct {
-	Topic          string `json:"topic" required:"true"`
-	UserAgent      string `json:"user_agent" required:"true"`
-	AccessEndpoint string `json:"access_endpoint" required:"true"`
-	ConcurrentSize int    `json:"concurrent_size" required:"true"`
+	Topic             string `json:"topic" required:"true"`
+	UserAgent         string `json:"user_agent" required:"true"`
+	AccessEndpoint    string `json:"access_endpoint" required:"true"`
+	ConcurrentSize    int    `json:"concurrent_size" required:"true"`
+	RetrievePerSecond int    `json:"retrieve_per_second" required:"true"`
 }
 
 func (a *accessConfig) validate() error {
@@ -36,6 +37,10 @@ func (a *accessConfig) validate() error {
 
 	if a.ConcurrentSize <= 0 {
 		return errors.New("Concurrent_size must be > 0")
+	}
+
+	if a.RetrievePerSecond <= a.ConcurrentSize {
+		return errors.New("Retrieve_per_second must be > Concurrent_size")
 	}
 
 	return nil

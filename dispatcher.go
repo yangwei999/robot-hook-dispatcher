@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/opensourceways/community-robot-lib/kafka"
 	"github.com/opensourceways/community-robot-lib/mq"
@@ -29,6 +30,10 @@ type dispatcher struct {
 	messageChanEmpty chan struct{}
 	messageChanSize  int
 
+	retrievePerSecond int
+	retrieveCount     int
+	retrieveChanReset chan struct{}
+
 	adjustmentDone chan struct{}
 	done           chan struct{}
 }
@@ -51,6 +56,10 @@ func newDispatcher(getConfig func() (*configuration, error)) (*dispatcher, error
 		messageChan:     make(chan *mq.Message, size),
 		messageChanSize: size,
 
+		retrievePerSecond: cfg.RetrievePerSecond,
+		retrieveCount:     0,
+		retrieveChanReset: make(chan struct{}),
+
 		messageChanEmpty: make(chan struct{}),
 		adjustmentDone:   make(chan struct{}),
 		done:             make(chan struct{}),
@@ -62,6 +71,13 @@ func (d *dispatcher) run(ctx context.Context, log *logrus.Entry) error {
 	if err != nil {
 		return err
 	}
+
+	// use a timer to control message count per second retrieved from kafka.
+	go func() {
+		for range time.Tick(1 * time.Second) {
+			d.retrieveChanReset <- struct{}{}
+		}
+	}()
 
 	go d.dispatch(log)
 
@@ -90,7 +106,13 @@ func (d *dispatcher) handle(event mq.Event) error {
 		return err
 	}
 
+	if d.retrieveCount >= d.retrievePerSecond {
+		<-d.retrieveChanReset
+		d.retrieveCount = 0
+	}
+
 	d.messageChan <- msg
+	d.retrieveCount++
 
 	return nil
 }
