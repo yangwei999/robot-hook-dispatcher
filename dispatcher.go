@@ -7,35 +7,28 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/sirupsen/logrus"
+
 	"github.com/opensourceways/community-robot-lib/kafka"
 	"github.com/opensourceways/community-robot-lib/mq"
 	"github.com/opensourceways/community-robot-lib/utils"
-	"github.com/sirupsen/logrus"
 )
 
 const (
-	headerHookDispatchExit   = "HOOK_DISPATCH_EXIT"
-	headerHookDispatchAdjust = "HOOK_DISPATCH_ADJUST"
-	headerUserAgent          = "User-Agent"
+	headerUserAgent = "User-Agent"
 )
 
 type dispatcher struct {
-	log       *logrus.Entry
-	hc        utils.HttpClient
-	topic     string
-	endpoint  string
-	userAgent string
-	getConfig func() (*configuration, error)
+	log                 *logrus.Entry
+	hc                  utils.HttpClient
+	topic               string
+	endpoint            string
+	userAgent           string
+	messageNumPerSecond int
+	getConfig           func() (*configuration, error)
 
-	messageChan      chan *mq.Message
-	messageChanEmpty chan struct{}
-	messageChanSize  int
-
-	starttime time.Time
+	startTime time.Time
 	sentNum   int
-
-	adjustmentDone chan struct{}
-	done           chan struct{}
 }
 
 func newDispatcher(getConfig func() (*configuration, error), log *logrus.Entry) (*dispatcher, error) {
@@ -44,22 +37,15 @@ func newDispatcher(getConfig func() (*configuration, error), log *logrus.Entry) 
 		return nil, err
 	}
 	cfg := &v.Config
-	size := cfg.ConcurrentSize
 
 	return &dispatcher{
-		log:       log,
-		hc:        utils.NewHttpClient(3),
-		topic:     cfg.Topic,
-		endpoint:  cfg.AccessEndpoint,
-		userAgent: cfg.UserAgent,
-		getConfig: getConfig,
-
-		messageChan:     make(chan *mq.Message, size),
-		messageChanSize: size,
-
-		messageChanEmpty: make(chan struct{}),
-		adjustmentDone:   make(chan struct{}),
-		done:             make(chan struct{}),
+		log:                 log,
+		hc:                  utils.NewHttpClient(3),
+		topic:               cfg.Topic,
+		endpoint:            cfg.AccessEndpoint,
+		userAgent:           cfg.UserAgent,
+		messageNumPerSecond: cfg.ConcurrentSize,
+		getConfig:           getConfig,
 	}, nil
 }
 
@@ -69,40 +55,42 @@ func (d *dispatcher) run(ctx context.Context) error {
 		return err
 	}
 
-	go d.dispatch()
+	go d.syncConcurrentSize()
 
 	<-ctx.Done()
 
-	s.Unsubscribe()
+	return s.Unsubscribe()
+}
 
-	msg := mq.Message{
-		Header: map[string]string{
-			headerHookDispatchExit: "exit",
-		},
+func (d *dispatcher) syncConcurrentSize() {
+	for range time.Tick(time.Minute) {
+		if cfg, err := d.getConfig(); err != nil {
+			d.log.Errorf("getConfig, err:%s", err.Error())
+		} else {
+			d.messageNumPerSecond = cfg.Config.ConcurrentSize
+		}
 	}
-	d.messageChan <- &msg
-
-	<-d.done
-
-	return nil
 }
 
 func (d *dispatcher) handle(event mq.Event) error {
-	d.adjustConcurrentSize()
-
 	msg := event.Message()
-
 	if err := d.validateMessage(msg); err != nil {
 		return err
 	}
 
-	d.messageChan <- msg
+	d.dispatch(msg)
 
+	d.speedControl()
+
+	return nil
+}
+
+func (d *dispatcher) speedControl() {
 	if d.sentNum++; d.sentNum == 1 {
-		d.starttime = time.Now()
-	} else if d.sentNum >= d.messageChanSize {
+		d.startTime = time.Now()
+	} else if d.sentNum >= d.messageNumPerSecond {
 		now := time.Now()
-		if v := d.starttime.Add(time.Second); v.After(now) {
+		if v := d.startTime.Add(time.Second); v.After(now) {
 			du := v.Sub(now)
 			time.Sleep(du)
 
@@ -114,36 +102,6 @@ func (d *dispatcher) handle(event mq.Event) error {
 
 		d.sentNum = 0
 	}
-
-	return nil
-}
-
-func (d *dispatcher) adjustConcurrentSize() {
-	cfg, err := d.getConfig()
-	if err != nil {
-		return
-	}
-
-	size := cfg.Config.ConcurrentSize
-	if size == d.messageChanSize {
-		return
-	}
-
-	msg := mq.Message{
-		Header: map[string]string{
-			headerHookDispatchAdjust: "adjust_concurrent_size",
-		},
-	}
-	d.messageChan <- &msg
-
-	<-d.messageChanEmpty
-
-	d.messageChan = make(chan *mq.Message, size)
-	d.messageChanSize = size
-
-	d.adjustmentDone <- struct{}{}
-
-	return
 }
 
 func (d *dispatcher) validateMessage(msg *mq.Message) error {
@@ -162,7 +120,7 @@ func (d *dispatcher) validateMessage(msg *mq.Message) error {
 	return nil
 }
 
-func (d *dispatcher) dispatch() {
+func (d *dispatcher) dispatch(msg *mq.Message) {
 	send := func(msg *mq.Message) error {
 		req, err := http.NewRequest(
 			http.MethodPost, d.endpoint, bytes.NewBuffer(msg.Body),
@@ -182,25 +140,7 @@ func (d *dispatcher) dispatch() {
 		return err
 	}
 
-	for {
-		select {
-		case msg := <-d.messageChan:
-			if msg.Header[headerHookDispatchAdjust] != "" {
-				d.messageChanEmpty <- struct{}{}
-
-				// Must wait. Otherwise it will listen on the old chan.
-				<-d.adjustmentDone
-
-			} else if msg.Header[headerHookDispatchExit] != "" {
-				close(d.done)
-
-				return
-
-			} else {
-				if err := send(msg); err != nil {
-					d.log.Errorf("send message, err:%s", err.Error())
-				}
-			}
-		}
+	if err := send(msg); err != nil {
+		d.log.Errorf("send message, err:%s", err.Error())
 	}
 }
