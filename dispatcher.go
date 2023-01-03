@@ -7,11 +7,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/sirupsen/logrus"
-
 	"github.com/opensourceways/community-robot-lib/kafka"
 	"github.com/opensourceways/community-robot-lib/mq"
 	"github.com/opensourceways/community-robot-lib/utils"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -19,16 +18,16 @@ const (
 )
 
 type dispatcher struct {
-	log                 *logrus.Entry
-	hc                  utils.HttpClient
-	topic               string
-	endpoint            string
-	userAgent           string
-	messageNumPerSecond int
-	getConfig           func() (*configuration, error)
+	log       *logrus.Entry
+	hc        utils.HttpClient
+	topic     string
+	endpoint  string
+	userAgent string
+	getConfig func() (*configuration, error)
 
-	startTime time.Time
-	sentNum   int
+	startTime         time.Time
+	sentNum           int
+	concurrentMsgSize int
 }
 
 func newDispatcher(getConfig func() (*configuration, error), log *logrus.Entry) (*dispatcher, error) {
@@ -39,13 +38,13 @@ func newDispatcher(getConfig func() (*configuration, error), log *logrus.Entry) 
 	cfg := &v.Config
 
 	return &dispatcher{
-		log:                 log,
-		hc:                  utils.NewHttpClient(3),
-		topic:               cfg.Topic,
-		endpoint:            cfg.AccessEndpoint,
-		userAgent:           cfg.UserAgent,
-		messageNumPerSecond: cfg.ConcurrentSize,
-		getConfig:           getConfig,
+		log:               log,
+		hc:                utils.NewHttpClient(3),
+		topic:             cfg.Topic,
+		endpoint:          cfg.AccessEndpoint,
+		userAgent:         cfg.UserAgent,
+		getConfig:         getConfig,
+		concurrentMsgSize: cfg.ConcurrentSize,
 	}, nil
 }
 
@@ -55,20 +54,16 @@ func (d *dispatcher) run(ctx context.Context) error {
 		return err
 	}
 
-	go d.syncConcurrentSize()
-
 	<-ctx.Done()
 
 	return s.Unsubscribe()
 }
 
 func (d *dispatcher) syncConcurrentSize() {
-	for range time.Tick(time.Minute) {
-		if cfg, err := d.getConfig(); err != nil {
-			d.log.Errorf("getConfig, err:%s", err.Error())
-		} else {
-			d.messageNumPerSecond = cfg.Config.ConcurrentSize
-		}
+	if cfg, err := d.getConfig(); err != nil {
+		d.log.Errorf("getConfig, err:%s", err.Error())
+	} else {
+		d.concurrentMsgSize = cfg.Config.ConcurrentSize
 	}
 }
 
@@ -77,6 +72,8 @@ func (d *dispatcher) handle(event mq.Event) error {
 	if err := d.validateMessage(msg); err != nil {
 		return err
 	}
+
+	d.syncConcurrentSize()
 
 	d.dispatch(msg)
 
@@ -88,7 +85,7 @@ func (d *dispatcher) handle(event mq.Event) error {
 func (d *dispatcher) speedControl() {
 	if d.sentNum++; d.sentNum == 1 {
 		d.startTime = time.Now()
-	} else if d.sentNum >= d.messageNumPerSecond {
+	} else if d.sentNum >= d.concurrentMsgSize {
 		now := time.Now()
 		if v := d.startTime.Add(time.Second); v.After(now) {
 			du := v.Sub(now)
@@ -121,26 +118,26 @@ func (d *dispatcher) validateMessage(msg *mq.Message) error {
 }
 
 func (d *dispatcher) dispatch(msg *mq.Message) {
-	send := func(msg *mq.Message) error {
-		req, err := http.NewRequest(
-			http.MethodPost, d.endpoint, bytes.NewBuffer(msg.Body),
-		)
-		if err != nil {
-			return err
-		}
+	if err := d.send(msg); err != nil {
+		d.log.Errorf("send message, err:%s", err.Error())
+	}
+}
 
-		h := http.Header{}
-		for k, v := range msg.Header {
-			h.Add(k, v)
-		}
-		req.Header = h
-
-		_, err = d.hc.ForwardTo(req, nil)
-
+func (d *dispatcher) send(msg *mq.Message) error {
+	req, err := http.NewRequest(
+		http.MethodPost, d.endpoint, bytes.NewBuffer(msg.Body),
+	)
+	if err != nil {
 		return err
 	}
 
-	if err := send(msg); err != nil {
-		d.log.Errorf("send message, err:%s", err.Error())
+	h := http.Header{}
+	for k, v := range msg.Header {
+		h.Add(k, v)
 	}
+	req.Header = h
+
+	_, err = d.hc.ForwardTo(req, nil)
+
+	return err
 }
