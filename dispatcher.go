@@ -25,9 +25,8 @@ type dispatcher struct {
 	userAgent string
 	getConfig func() (*configuration, error)
 
-	startTime         time.Time
-	sentNum           int
-	concurrentMsgSize int
+	startTime time.Time
+	sentNum   int
 }
 
 func newDispatcher(getConfig func() (*configuration, error), log *logrus.Entry) (*dispatcher, error) {
@@ -38,13 +37,12 @@ func newDispatcher(getConfig func() (*configuration, error), log *logrus.Entry) 
 	cfg := &v.Config
 
 	return &dispatcher{
-		log:               log,
-		hc:                utils.NewHttpClient(3),
-		topic:             cfg.Topic,
-		endpoint:          cfg.AccessEndpoint,
-		userAgent:         cfg.UserAgent,
-		getConfig:         getConfig,
-		concurrentMsgSize: cfg.ConcurrentSize,
+		log:       log,
+		hc:        utils.NewHttpClient(3),
+		topic:     cfg.Topic,
+		endpoint:  cfg.AccessEndpoint,
+		userAgent: cfg.UserAgent,
+		getConfig: getConfig,
 	}, nil
 }
 
@@ -59,21 +57,11 @@ func (d *dispatcher) run(ctx context.Context) error {
 	return s.Unsubscribe()
 }
 
-func (d *dispatcher) syncConcurrentSize() {
-	if cfg, err := d.getConfig(); err != nil {
-		d.log.Errorf("getConfig, err:%s", err.Error())
-	} else {
-		d.concurrentMsgSize = cfg.Config.ConcurrentSize
-	}
-}
-
 func (d *dispatcher) handle(event mq.Event) error {
 	msg := event.Message()
 	if err := d.validateMessage(msg); err != nil {
 		return err
 	}
-
-	d.syncConcurrentSize()
 
 	d.dispatch(msg)
 
@@ -83,9 +71,14 @@ func (d *dispatcher) handle(event mq.Event) error {
 }
 
 func (d *dispatcher) speedControl() {
+	cfg, err := d.getConfig()
+	if err != nil {
+		d.log.Errorf("getConfig, err:%s", err.Error())
+	}
+
 	if d.sentNum++; d.sentNum == 1 {
 		d.startTime = time.Now()
-	} else if d.sentNum >= d.concurrentMsgSize {
+	} else if d.sentNum >= cfg.Config.ConcurrentSize {
 		now := time.Now()
 		if v := d.startTime.Add(time.Second); v.After(now) {
 			du := v.Sub(now)
@@ -131,11 +124,9 @@ func (d *dispatcher) send(msg *mq.Message) error {
 		return err
 	}
 
-	h := http.Header{}
 	for k, v := range msg.Header {
-		h.Add(k, v)
+		req.Header.Add(k, v)
 	}
-	req.Header = h
 
 	_, err = d.hc.ForwardTo(req, nil)
 
