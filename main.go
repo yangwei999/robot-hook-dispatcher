@@ -9,11 +9,11 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/opensourceways/community-robot-lib/config"
-	"github.com/opensourceways/community-robot-lib/kafka"
-	"github.com/opensourceways/community-robot-lib/logrusutil"
-	"github.com/opensourceways/community-robot-lib/mq"
-	liboptions "github.com/opensourceways/community-robot-lib/options"
+	"github.com/opensourceways/kafka-lib/kafka"
+	"github.com/opensourceways/kafka-lib/mq"
+	"github.com/opensourceways/server-common-lib/config"
+	"github.com/opensourceways/server-common-lib/logrusutil"
+	liboptions "github.com/opensourceways/server-common-lib/options"
 	"github.com/sirupsen/logrus"
 )
 

@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/opensourceways/community-robot-lib/kafka"
-	"github.com/opensourceways/community-robot-lib/mq"
-	"github.com/opensourceways/community-robot-lib/utils"
+	"github.com/opensourceways/kafka-lib/kafka"
+	"github.com/opensourceways/kafka-lib/mq"
+	"github.com/opensourceways/server-common-lib/utils"
 	"github.com/sirupsen/logrus"
 )
 
@@ -42,12 +42,7 @@ func newDispatcher(
 }
 
 func (d *dispatcher) run(ctx context.Context) error {
-	s, err := kafka.Subscribe(
-		d.topic, d.handle,
-		func(opt *mq.SubscribeOptions) {
-			opt.Queue = component
-		},
-	)
+	s, err := kafka.Subscribe(d.topic, component, d.handle)
 	if err != nil {
 		return err
 	}
