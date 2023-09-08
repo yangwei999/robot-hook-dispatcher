@@ -19,6 +19,6 @@ RUN dnf -y update && \
 
 USER hook-dispatcher
 
-COPY  --from=BUILDER /go/src/github.com/opensourceways/robot-hook-dispatcher/robot-hook-dispatcher /opt/app/robot-hook-dispatcher
+COPY  --chown=hook-dispatcher --from=BUILDER /go/src/github.com/opensourceways/robot-hook-dispatcher/robot-hook-dispatcher /opt/app/robot-hook-dispatcher
 
 ENTRYPOINT ["/opt/app/robot-hook-dispatcher"]
