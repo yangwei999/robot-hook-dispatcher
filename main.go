@@ -9,11 +9,10 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/opensourceways/community-robot-lib/config"
-	"github.com/opensourceways/community-robot-lib/kafka"
-	"github.com/opensourceways/community-robot-lib/logrusutil"
-	"github.com/opensourceways/community-robot-lib/mq"
-	liboptions "github.com/opensourceways/community-robot-lib/options"
+	kafka "github.com/opensourceways/kafka-lib/agent"
+	"github.com/opensourceways/server-common-lib/config"
+	"github.com/opensourceways/server-common-lib/logrusutil"
+	liboptions "github.com/opensourceways/server-common-lib/options"
 	"github.com/sirupsen/logrus"
 )
 
@@ -45,6 +44,7 @@ const component = "robot-hook-dispatcher"
 
 func main() {
 	logrusutil.ComponentInit(component)
+	log := logrus.NewEntry(logrus.StandardLogger())
 
 	o := gatherOptions(
 		flag.NewFlagSet(os.Args[0], flag.ExitOnError),
@@ -84,16 +84,13 @@ func main() {
 	}
 
 	// init kafka
-	kafkaCfg, err := cfg.kafkaConfig()
-	if err != nil {
-		logrus.Errorf("Error loading kfk config, err:%v.", err)
+	if err = kafka.Init(&cfg.Kafka, log, nil, ""); err != nil {
+		logrus.Errorf("init kafka, err:%s", err.Error())
+
+		return
 	}
 
-	if err := connetKafka(&kafkaCfg); err != nil {
-		logrus.Fatalf("Error connecting kfk mq, err:%v", err)
-	}
-
-	defer kafka.Disconnect()
+	defer kafka.Exit()
 
 	// server
 	d, err := newDispatcher(
@@ -113,24 +110,6 @@ func main() {
 
 	// run
 	run(d)
-}
-
-func connetKafka(cfg *mq.MQConfig) error {
-	tlsConfig, err := cfg.TLSConfig.TLSConfig()
-	if err != nil {
-		return err
-	}
-
-	err = kafka.Init(
-		mq.Addresses(cfg.Addresses...),
-		mq.SetTLSConfig(tlsConfig),
-		mq.Log(logrus.WithField("module", "kfk")),
-	)
-	if err != nil {
-		return err
-	}
-
-	return kafka.Connect()
 }
 
 func run(d *dispatcher) {

@@ -7,9 +7,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/opensourceways/community-robot-lib/kafka"
-	"github.com/opensourceways/community-robot-lib/mq"
-	"github.com/opensourceways/community-robot-lib/utils"
+	kafka "github.com/opensourceways/kafka-lib/agent"
+	"github.com/opensourceways/server-common-lib/utils"
 	"github.com/sirupsen/logrus"
 )
 
@@ -28,6 +27,11 @@ type dispatcher struct {
 	sentNum   int
 }
 
+type message struct {
+	Body   []byte
+	Header map[string]string
+}
+
 func newDispatcher(
 	cfg *configuration,
 	concurrentSize func() (int, error),
@@ -42,23 +46,21 @@ func newDispatcher(
 }
 
 func (d *dispatcher) run(ctx context.Context) error {
-	s, err := kafka.Subscribe(
-		d.topic, d.handle,
-		func(opt *mq.SubscribeOptions) {
-			opt.Queue = component
-		},
-	)
-	if err != nil {
+	if err := kafka.Subscribe(component, d.handle, []string{d.topic}); err != nil {
 		return err
 	}
 
 	<-ctx.Done()
 
-	return s.Unsubscribe()
+	return nil
 }
 
-func (d *dispatcher) handle(event mq.Event) error {
-	msg := event.Message()
+func (d *dispatcher) handle(payload []byte, header map[string]string) error {
+	msg := &message{
+		Body:   payload,
+		Header: header,
+	}
+
 	if err := d.validateMessage(msg); err != nil {
 		return err
 	}
@@ -106,11 +108,7 @@ func (d *dispatcher) speedControl() {
 	}
 }
 
-func (d *dispatcher) validateMessage(msg *mq.Message) error {
-	if msg == nil {
-		return errors.New("get a nil msg from broker")
-	}
-
+func (d *dispatcher) validateMessage(msg *message) error {
 	if len(msg.Header) == 0 || msg.Header[headerUserAgent] != d.userAgent {
 		return errors.New("unexpect message: invalid header")
 	}
@@ -122,7 +120,7 @@ func (d *dispatcher) validateMessage(msg *mq.Message) error {
 	return nil
 }
 
-func (d *dispatcher) dispatch(msg *mq.Message) {
+func (d *dispatcher) dispatch(msg *message) {
 	if err := d.send(msg); err != nil {
 		logrus.Errorf("send message, err:%s", err.Error())
 	} else {
@@ -130,7 +128,7 @@ func (d *dispatcher) dispatch(msg *mq.Message) {
 	}
 }
 
-func (d *dispatcher) send(msg *mq.Message) error {
+func (d *dispatcher) send(msg *message) error {
 	req, err := http.NewRequest(
 		http.MethodPost, d.endpoint, bytes.NewBuffer(msg.Body),
 	)
