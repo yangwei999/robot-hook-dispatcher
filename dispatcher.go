@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/opensourceways/kafka-lib/agent"
+	kafka "github.com/opensourceways/kafka-lib/agent"
 	"github.com/opensourceways/server-common-lib/utils"
 	"github.com/sirupsen/logrus"
 )
@@ -46,11 +46,7 @@ func newDispatcher(
 }
 
 func (d *dispatcher) run(ctx context.Context) error {
-	subscribers := map[string]agent.Handler{
-		d.topic: d.handle,
-	}
-
-	if err := agent.Subscribe(component, subscribers); err != nil {
+	if err := kafka.Subscribe(component, d.handle, []string{d.topic}); err != nil {
 		return err
 	}
 

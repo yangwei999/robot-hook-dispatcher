@@ -84,7 +84,7 @@ func main() {
 	}
 
 	// init kafka
-	if err := kafka.Init(&cfg.Kafka, log); err != nil {
+	if err = kafka.Init(&cfg.Kafka, log, nil, ""); err != nil {
 		logrus.Errorf("init kafka, err:%s", err.Error())
 
 		return
